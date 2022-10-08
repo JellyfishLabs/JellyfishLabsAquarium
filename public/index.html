@@ -43,9 +43,8 @@
     <div id="message">
       <h1>Welcome!</h1>
       <p>Thank you for visiting Jellyfish Labs!<br><br>This page is currently under development.<br>Check back soon!</p>
-      <img >
     </div>
-    <!--<p id="load">Firebase SDK Loading&hellip;</p>-->
+    <p id="load">Firebase SDK Loading&hellip;</p>
 
     <script>
       document.addEventListener('DOMContentLoaded', function() {
@@ -81,7 +80,8 @@
           loadEl.textContent = `Firebase SDK loaded with ${features.join(', ')}`;
         } catch (e) {
           console.error(e);
-          loadEl.textContent = 'Error loading the Firebase SDK, check the console.';
+          //loadEl.textContent = 'Error loading the Firebase SDK, check the console.';
+          loadEl.textContent = 'Have questions? Reach us at JellyfishLabsHelp@gmail.com';
         }
       });
     </script>
