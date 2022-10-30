@@ -25,6 +25,8 @@
 
 #include "stdbool.h"
 #include "stdint.h"
+#include "string.h"
+#include "Adafruit_ILI9341.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +50,11 @@
 #define PH_UP_PIN GPIO_PIN_8
 #define PH_DOWN_PIN GPIO_PIN_6
 
+
+#define DEFAULT_TEMP 77 //Default temp in degrees Fahrenheit if not specified
+#define HEATER_TOLERANCE_LOW 2
+#define HEATER_TOLERANCE_HIGH 2
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,15 +65,25 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc;
 
+SPI_HandleTypeDef hspi2;
+DMA_HandleTypeDef hdma_spi2_rx;
+DMA_HandleTypeDef hdma_spi2_tx;
+
 TIM_HandleTypeDef htim2;
 
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
+DMA_HandleTypeDef hdma_uart4_rx;
+DMA_HandleTypeDef hdma_uart4_tx;
 
 osThreadId defaultTaskHandle;
 osThreadId TempSensorTaskHandle;
 osThreadId HeaterTaskHandle;
 osThreadId PhSensorTaskHandle;
 osThreadId PhBalanceTaskHandle;
+osThreadId DataRxTaskHandle;
+osThreadId DataTxTaskHandle;
+osThreadId ScreenTaskHandle;
 osTimerId myTimer01Handle;
 osSemaphoreId myBinarySem01Handle;
 /* USER CODE BEGIN PV */
@@ -76,14 +93,20 @@ osSemaphoreId myBinarySem01Handle;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC_Init(void);
+static void MX_UART4_Init(void);
+static void MX_SPI2_Init(void);
 void StartDefaultTask(void const * argument);
 void TempSensorBegin(void const * argument);
 void HeaterBegin(void const * argument);
 void PhSensorBegin(void const * argument);
 void PhBalanceBegin(void const * argument);
+void DataRxBegin(void const * argument);
+void DataTxBegin(void const * argument);
+void ScreenTaskBegin(void const * argument);
 void Callback01(void const * argument);
 
 /* USER CODE BEGIN PFP */
@@ -92,42 +115,116 @@ void Callback01(void const * argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+//Screen Variables Begin:
+SPI_HandleTypeDef hspi2;
+SPI_HandleTypeDef* ILI9341_HSPI_INST = &hspi2;
+
+GPIO_TypeDef* ILI9341_CSX_PORT = GPIOC;
+uint16_t ILI9341_CSX_PIN  = GPIO_PIN_4;
+
+GPIO_TypeDef* ILI9341_DCX_PORT = GPIOC;
+uint16_t ILI9341_DCX_PIN  = GPIO_PIN_5;
+
+cursor_t cur;
+int changedBrightness;                                                              				// boolean var if brightness has been changed
+uint8_t size[2];
+
+volatile double display_current_temp = 0;
+volatile double display_current_pH = 0;
+volatile double display_target_temp = 0;
+volatile double display_target_pH = 0;
+
+//struct ILI9341_locations{
+	cursor_t target_temp_header = {0,0};
+	cursor_t target_temp_val = {250,0};
+	cursor_t current_temp_header= {0,20};
+	cursor_t current_temp_val = {250,20};
+	cursor_t target_pH_header = {0,40};
+	cursor_t target_pH_val = {250,40};
+	cursor_t current_pH_header = {0,60};
+	cursor_t current_pH_val = {250,60};
+//};
+//Screen Variables End:
+
+volatile double temp_raw;
+volatile double temp_C;
+volatile double temp_F;
+volatile double current_pH =1;
+volatile double target_pH = 7.0;
+
+volatile double target_temp = DEFAULT_TEMP;
+volatile double current_temp = DEFAULT_TEMP;
+volatile double temp_samples[8] = {DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP};
+
+
+volatile uint8_t tx_packet[80];
+volatile uint8_t rx_packet[80];
+
+
 void delay_us (uint16_t delay)
 {
 	__HAL_TIM_SET_COUNTER (&htim2, 0);
-	//int tim_val;
 	while (__HAL_TIM_GET_COUNTER(&htim2)<delay); //{
-		/*while(1){
-			tim_val = __HAL_TIM_GET_COUNTER(&htim2);
-		if(tim_val > delay) {
-			break;
-		}*/
-	//}
-	//HAL_GPIO_TogglePin(GPIO_TEMP_Base, GPIO_PIN_8);
+
 }
 
-//__STATIC_INLINE void delay_us(volatile uint32_t microseconds)
-//{
-//	int xs =1;
-//  uint32_t clk_cycle_start = DWT->CYCCNT;
-//
-//  /* Go to number of cycles for system */
-//  microseconds *= (HAL_RCC_GetHCLKFreq() / 1000000);
-//
-//  /* Delay till end */
-//  while ((DWT->CYCCNT - clk_cycle_start) < microseconds);
-//  int x =1;
-//}
+void ILI9341_default_print()
+{
+	ILI9341_ResetTextBox(&cur);
+	ILI9341_PrintString(&target_temp_header, "Target Temperature:");
+	ILI9341_PrintString(&current_temp_header, "Current Temperature:");
+	ILI9341_PrintString(&target_pH_header, "Target pH value:");
+	ILI9341_PrintString(&current_pH_header, "Current pH value:");
+}
+
+void ILI9341_update()
+{
+	if (display_target_temp != target_temp){
+		uint8_t target_temp_buf[6];
+		snprintf(target_temp_buf, 6, "%0.2f", target_temp);
+		ILI9341_PrintString(&target_temp_val, target_temp_buf);
+		display_target_temp = target_temp;
+		target_temp_val.x = 250;
+		target_temp_val.y = 0;
+	}
+	if (display_current_temp != current_temp){
+		uint8_t current_temp_buf[6];
+		snprintf(current_temp_buf, 6, "%0.2f", current_temp);
+		ILI9341_PrintString(&current_temp_val, current_temp_buf);
+		display_current_temp = current_temp;
+		current_temp_val.x = 250;
+		current_temp_val.y = 20;
+	}
+	if (display_target_pH != target_pH){
+		uint8_t target_pH_buf[6];
+		snprintf(target_pH_buf, 6, "%0.2f", target_pH);
+		ILI9341_PrintString(&target_pH_val, target_pH_buf);
+		display_target_pH = target_pH;
+		target_pH_val.x = 250;
+		target_pH_val.y = 40;
+	}
+	if (display_current_pH != current_pH){
+		uint8_t current_pH_buf[6];
+		snprintf(current_pH_buf, 6, "%0.2f", current_pH);
+		ILI9341_PrintString(&current_pH_val, current_pH_buf);
+		display_current_pH = current_pH;
+		current_pH_val.x = 250;
+		current_pH_val.y = 60;
+	}
+
+}
+
+
+
 
 bool DS18B20_Init()
 {
-  //pinMode(DSPIN, OUTPUT);
   HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
   delay_us(5);
   HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
   delay_us(750);//480-960
   HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  //pinMode(DSPIN, INPUT);
   int t = 0;
   while (HAL_GPIO_ReadPin(GPIO_TEMP_Base,GPIO_TEMP_RX))
   {
@@ -136,7 +233,6 @@ bool DS18B20_Init()
     delay_us(1);
   }
   t = 480 - t;
-  //pinMode(DSPIN, OUTPUT);
   delay_us(t);
   HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
   return true;
@@ -144,7 +240,6 @@ bool DS18B20_Init()
 
 void DS18B20_Write(uint8_t data)
 {
-  //pinMode(DSPIN, OUTPUT);
   for (int i = 0; i < 8; i++)
   {
     HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
@@ -159,7 +254,6 @@ void DS18B20_Write(uint8_t data)
 
 uint8_t DS18B20_Read()
 {
-  //pinMode(DSPIN, OUTPUT);
   HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX, GPIO_PIN_SET);
   delay_us(2);
   uint8_t data = 0;
@@ -168,12 +262,10 @@ uint8_t DS18B20_Read()
     HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
     delay_us(1);
     HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  //  pinMode(DSPIN, INPUT);
     delay_us(5);
     data >>= 1;
     if (HAL_GPIO_ReadPin(GPIO_TEMP_Base,GPIO_TEMP_RX)) data |= 0x80;
     delay_us(55);
-    //pinMode(DSPIN, OUTPUT);
     HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
   }
   return data;
@@ -192,6 +284,23 @@ volatile int TempRead()
   return temp;
 }
 
+volatile double TempCompute()
+{
+	double sum = 0;
+	double temporary[8];
+	for (int i = 0; i < 8; ++i){
+		temporary[i] = temp_samples[i];
+	}
+	for (int i = 1; i < 8; ++i){
+		temp_samples[i] = temporary[i-1];
+		sum += temp_samples[i];
+	}
+	temp_samples[0] = temp_F;
+	sum += temp_F;
+	return (sum/8);
+}
+
+
 
 void HEATER_CONTROL_ON()
 {
@@ -208,10 +317,21 @@ void HEATER_TOGGLE()
 	 HAL_GPIO_TogglePin(GPIO_HEATER_Base,GPIO_HEATER_PIN);
 }
 
-volatile double temp_raw;
-volatile double temp_C;
-volatile double temp_F;
-volatile double pH;
+void HEATER_DECIDE()
+{
+	if(HAL_GPIO_ReadPin(GPIO_HEATER_Base,GPIO_HEATER_PIN)){
+		if(current_temp >= target_temp + HEATER_TOLERANCE_HIGH){
+			HEATER_CONTROL_OFF();
+		}
+	}
+	else{
+		if (current_temp < target_temp - HEATER_TOLERANCE_LOW){
+			HEATER_CONTROL_ON();
+		}
+	}
+}
+
+
 
 /* USER CODE END 0 */
 
@@ -243,14 +363,16 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_ADC_Init();
+  MX_UART4_Init();
+  MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
-  //__disable_irq();
- // DS18B20_Init();
- // __enable_irq();
+  ILI9341_Init();
+  ILI9341_default_print();
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -300,8 +422,20 @@ int main(void)
   osThreadDef(PhBalanceTask, PhBalanceBegin, osPriorityIdle, 0, 128);
   PhBalanceTaskHandle = osThreadCreate(osThread(PhBalanceTask), NULL);
 
+  /* definition and creation of DataRxTask */
+  osThreadDef(DataRxTask, DataRxBegin, osPriorityIdle, 0, 128);
+  DataRxTaskHandle = osThreadCreate(osThread(DataRxTask), NULL);
+
+  /* definition and creation of DataTxTask */
+  osThreadDef(DataTxTask, DataTxBegin, osPriorityIdle, 0, 256);
+  DataTxTaskHandle = osThreadCreate(osThread(DataTxTask), NULL);
+
+  /* definition and creation of ScreenTask */
+  osThreadDef(ScreenTask, ScreenTaskBegin, osPriorityAboveNormal, 0, 256);
+  ScreenTaskHandle = osThreadCreate(osThread(ScreenTask), NULL);
+
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -418,6 +552,44 @@ static void MX_ADC_Init(void)
 }
 
 /**
+  * @brief SPI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI2_Init(void)
+{
+
+  /* USER CODE BEGIN SPI2_Init 0 */
+
+  /* USER CODE END SPI2_Init 0 */
+
+  /* USER CODE BEGIN SPI2_Init 1 */
+
+  /* USER CODE END SPI2_Init 1 */
+  /* SPI2 parameter configuration*/
+  hspi2.Instance = SPI2;
+  hspi2.Init.Mode = SPI_MODE_MASTER;
+  hspi2.Init.Direction = SPI_DIRECTION_1LINE;
+  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi2.Init.NSS = SPI_NSS_SOFT;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi2.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI2_Init 2 */
+
+  /* USER CODE END SPI2_Init 2 */
+
+}
+
+/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -463,6 +635,39 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 9600;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -496,6 +701,32 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+  /* DMA1_Channel5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+  /* DMA2_Channel3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Channel3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Channel3_IRQn);
+  /* DMA2_Channel5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Channel5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Channel5_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -514,7 +745,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6|GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -535,8 +766,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC6 PC8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_8;
+  /*Configure GPIO pins : PC4 PC5 PC6 PC8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -580,16 +811,19 @@ void TempSensorBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	  //xSemaphoreTake( myBinarySem01Handle, portMAX_DELAY );
+	  taskENTER_CRITICAL();
 	  temp_raw = TempRead();
-	  //xSemaphoreGive(myBinarySem01Handle);
-	  temp_C  = temp_raw * 0.0625; // conversion accuracy is 0.0625 / LSB
-	  temp_F = temp_raw * 0.1125 + 32;
+	  taskEXIT_CRITICAL();
+	  if (temp_raw != 0)
+	  {
+		  temp_C  = temp_raw * 0.0625; // conversion accuracy is 0.0625 / LSB
+		  temp_F = temp_raw * 0.1125 + 32;
+		  current_temp = TempCompute();
+	  }
 	  if (temp_F > 60){
 	  	  HAL_GPIO_TogglePin(GPIO_TEMP_Base, GPIO_PIN_8);
 	  }
-	  //__enable_irq();
-	  osDelay(1000);
+	  osDelay(2000);
 
   }
 
@@ -610,9 +844,7 @@ void HeaterBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	//xSemaphoreTake( myBinarySem01Handle, portMAX_DELAY );
-	HEATER_TOGGLE();
-	//xSemaphoreGive(myBinarySem01Handle);
+	HEATER_DECIDE();
 	osDelay(3000);
   }
 
@@ -635,7 +867,7 @@ void PhSensorBegin(void const * argument)
   {
 	HAL_ADC_Start(&hadc);
 	HAL_ADC_PollForConversion(&hadc, 0xFFFFFFFF);
-	pH = (double)HAL_ADC_GetValue(&hadc) * 0.002734375; // *14 /1024 /5
+	current_pH = (double)HAL_ADC_GetValue(&hadc) * 0.002734375; // *14 /1024 /5
     osDelay(1000);
   }
   /* USER CODE END PhSensorBegin */
@@ -659,6 +891,87 @@ void PhBalanceBegin(void const * argument)
     osDelay(1000);
   }
   /* USER CODE END PhBalanceBegin */
+}
+
+/* USER CODE BEGIN Header_DataRxBegin */
+/**
+* @brief Function implementing the DataRxTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_DataRxBegin */
+void DataRxBegin(void const * argument)
+{
+  /* USER CODE BEGIN DataRxBegin */
+  /* Infinite loop */
+  for(;;)
+  {
+	for (int i = 0; i < 80; ++i){
+		rx_packet[i] = 0;
+	}
+    HAL_UART_Receive(&huart4, rx_packet, 43, 10000);
+    osDelay(10000);
+  }
+  /* USER CODE END DataRxBegin */
+}
+
+/* USER CODE BEGIN Header_DataTxBegin */
+/**
+* @brief Function implementing the DataTxTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_DataTxBegin */
+void DataTxBegin(void const * argument)
+{
+  /* USER CODE BEGIN DataTxBegin */
+  /* Infinite loop */
+  for(;;)
+  {
+	uint8_t carriage_return[] = "\r\n";
+	uint8_t temp_header[] = " Current temperature: ";
+	uint8_t tx_temp[6];
+	snprintf(tx_temp, 6, "%0.2f", current_temp);
+	uint8_t pH_header[] = " Current pH value: ";
+	uint8_t tx_pH[sizeof(current_pH)];
+	snprintf(tx_pH, 4, "%0.2f", current_pH);
+	unsigned int size=0;
+	memcpy(tx_packet + size, temp_header, sizeof(temp_header));
+	size+= sizeof(temp_header);
+	memcpy(tx_packet + size, tx_temp, sizeof(tx_temp));
+	size += sizeof(tx_temp);
+	memcpy(tx_packet + size, pH_header, sizeof(pH_header));
+	size += sizeof(pH_header);
+	memcpy(tx_packet + size, tx_pH, 3);
+	size += 3;
+	memcpy(tx_packet + size, carriage_return, sizeof(carriage_return));
+	size += sizeof(carriage_return);
+
+	taskENTER_CRITICAL();
+	HAL_UART_Transmit(&huart4, tx_packet, size, 10000);
+	taskEXIT_CRITICAL();
+    osDelay(10000);
+  }
+  /* USER CODE END DataTxBegin */
+}
+
+/* USER CODE BEGIN Header_ScreenTaskBegin */
+/**
+* @brief Function implementing the ScreenTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_ScreenTaskBegin */
+void ScreenTaskBegin(void const * argument)
+{
+  /* USER CODE BEGIN ScreenTaskBegin */
+  /* Infinite loop */
+  for(;;)
+  {
+	ILI9341_update();
+    osDelay(10000);
+  }
+  /* USER CODE END ScreenTaskBegin */
 }
 
 /* Callback01 function */
@@ -721,3 +1034,4 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
