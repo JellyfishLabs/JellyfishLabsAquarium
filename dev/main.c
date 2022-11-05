@@ -27,6 +27,7 @@
 #include "stdint.h"
 #include "string.h"
 #include "Adafruit_ILI9341.h"
+#include "neopixel.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,20 +71,23 @@ DMA_HandleTypeDef hdma_spi2_rx;
 DMA_HandleTypeDef hdma_spi2_tx;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+DMA_HandleTypeDef hdma_tim3_ch4_up;
+DMA_HandleTypeDef hdma_tim3_ch1_trig;
 
 UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
-DMA_HandleTypeDef hdma_uart4_rx;
 DMA_HandleTypeDef hdma_uart4_tx;
+DMA_HandleTypeDef hdma_uart4_rx;
 
 osThreadId defaultTaskHandle;
 osThreadId TempSensorTaskHandle;
 osThreadId HeaterTaskHandle;
 osThreadId PhSensorTaskHandle;
 osThreadId PhBalanceTaskHandle;
-osThreadId DataRxTaskHandle;
 osThreadId DataTxTaskHandle;
 osThreadId ScreenTaskHandle;
+osThreadId LEDTaskHandle;
 osTimerId myTimer01Handle;
 osSemaphoreId myBinarySem01Handle;
 /* USER CODE BEGIN PV */
@@ -99,14 +103,15 @@ static void MX_TIM2_Init(void);
 static void MX_ADC_Init(void);
 static void MX_UART4_Init(void);
 static void MX_SPI2_Init(void);
+static void MX_TIM3_Init(void);
 void StartDefaultTask(void const * argument);
 void TempSensorBegin(void const * argument);
 void HeaterBegin(void const * argument);
 void PhSensorBegin(void const * argument);
 void PhBalanceBegin(void const * argument);
-void DataRxBegin(void const * argument);
 void DataTxBegin(void const * argument);
 void ScreenTaskBegin(void const * argument);
+void LEDBegin(void const * argument);
 void Callback01(void const * argument);
 
 /* USER CODE BEGIN PFP */
@@ -158,8 +163,10 @@ volatile double current_temp = DEFAULT_TEMP;
 volatile double temp_samples[8] = {DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP};
 
 
-volatile uint8_t tx_packet[80];
+volatile uint8_t tx_packet[100];
 volatile uint8_t rx_packet[80];
+
+volatile uint8_t LED_flip = 0;
 
 
 void delay_us (uint16_t delay)
@@ -331,6 +338,11 @@ void HEATER_DECIDE()
 	}
 }
 
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+  HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
+}
+
 
 
 /* USER CODE END 0 */
@@ -369,10 +381,13 @@ int main(void)
   MX_ADC_Init();
   MX_UART4_Init();
   MX_SPI2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
   ILI9341_Init();
+  __disable_irq();
   ILI9341_default_print();
+  __enable_irq();
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -422,17 +437,17 @@ int main(void)
   osThreadDef(PhBalanceTask, PhBalanceBegin, osPriorityIdle, 0, 128);
   PhBalanceTaskHandle = osThreadCreate(osThread(PhBalanceTask), NULL);
 
-  /* definition and creation of DataRxTask */
-  osThreadDef(DataRxTask, DataRxBegin, osPriorityIdle, 0, 128);
-  DataRxTaskHandle = osThreadCreate(osThread(DataRxTask), NULL);
-
   /* definition and creation of DataTxTask */
-  osThreadDef(DataTxTask, DataTxBegin, osPriorityIdle, 0, 256);
+  osThreadDef(DataTxTask, DataTxBegin, osPriorityHigh, 0, 256);
   DataTxTaskHandle = osThreadCreate(osThread(DataTxTask), NULL);
 
   /* definition and creation of ScreenTask */
-  osThreadDef(ScreenTask, ScreenTaskBegin, osPriorityAboveNormal, 0, 256);
+  osThreadDef(ScreenTask, ScreenTaskBegin, osPriorityHigh, 0, 256);
   ScreenTaskHandle = osThreadCreate(osThread(ScreenTask), NULL);
+
+  /* definition and creation of LEDTask */
+  osThreadDef(LEDTask, LEDBegin, osPriorityAboveNormal, 0, 256);
+  LEDTaskHandle = osThreadCreate(osThread(LEDTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
 
@@ -635,6 +650,65 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 39;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
   * @brief UART4 Initialization Function
   * @param None
   * @retval None
@@ -711,12 +785,18 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
+  /* DMA1_Channel3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
   /* DMA1_Channel4_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
   /* DMA1_Channel5_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+  /* DMA1_Channel6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel6_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel6_IRQn);
   /* DMA2_Channel3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Channel3_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA2_Channel3_IRQn);
@@ -893,28 +973,6 @@ void PhBalanceBegin(void const * argument)
   /* USER CODE END PhBalanceBegin */
 }
 
-/* USER CODE BEGIN Header_DataRxBegin */
-/**
-* @brief Function implementing the DataRxTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_DataRxBegin */
-void DataRxBegin(void const * argument)
-{
-  /* USER CODE BEGIN DataRxBegin */
-  /* Infinite loop */
-  for(;;)
-  {
-	for (int i = 0; i < 80; ++i){
-		rx_packet[i] = 0;
-	}
-    HAL_UART_Receive(&huart4, rx_packet, 43, 10000);
-    osDelay(10000);
-  }
-  /* USER CODE END DataRxBegin */
-}
-
 /* USER CODE BEGIN Header_DataTxBegin */
 /**
 * @brief Function implementing the DataTxTask thread.
@@ -928,14 +986,19 @@ void DataTxBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+	 // for (int i = 0; i < 60; ++i){
+	  	//	tx_packet[i] = 0;
+	  //	}
 	uint8_t carriage_return[] = "\r\n";
-	uint8_t temp_header[] = " Current temperature: ";
+	uint8_t right_brace[] = "}";
+	uint8_t temp_header[] = "{ \"Current temperature\": ";
 	uint8_t tx_temp[6];
+	taskENTER_CRITICAL();
 	snprintf(tx_temp, 6, "%0.2f", current_temp);
-	uint8_t pH_header[] = " Current pH value: ";
+	uint8_t pH_header[] = ", \"Current pH value\": ";
 	uint8_t tx_pH[sizeof(current_pH)];
 	snprintf(tx_pH, 4, "%0.2f", current_pH);
-	unsigned int size=0;
+	volatile unsigned int size=0;
 	memcpy(tx_packet + size, temp_header, sizeof(temp_header));
 	size+= sizeof(temp_header);
 	memcpy(tx_packet + size, tx_temp, sizeof(tx_temp));
@@ -944,11 +1007,15 @@ void DataTxBegin(void const * argument)
 	size += sizeof(pH_header);
 	memcpy(tx_packet + size, tx_pH, 3);
 	size += 3;
+	memcpy(tx_packet + size, right_brace, sizeof(right_brace));
+	size += sizeof(right_brace);
 	memcpy(tx_packet + size, carriage_return, sizeof(carriage_return));
 	size += sizeof(carriage_return);
-
-	taskENTER_CRITICAL();
 	HAL_UART_Transmit(&huart4, tx_packet, size, 10000);
+	for (int i = 0; i < 80; ++i){
+		rx_packet[i] = 0;
+	}
+    HAL_UART_Receive(&huart4, rx_packet, 43, 10000);
 	taskEXIT_CRITICAL();
     osDelay(10000);
   }
@@ -968,10 +1035,42 @@ void ScreenTaskBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+	taskENTER_CRITICAL();
 	ILI9341_update();
+	taskEXIT_CRITICAL();
     osDelay(10000);
   }
   /* USER CODE END ScreenTaskBegin */
+}
+
+/* USER CODE BEGIN Header_LEDBegin */
+/**
+* @brief Function implementing the LEDTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_LEDBegin */
+void LEDBegin(void const * argument)
+{
+  /* USER CODE BEGIN LEDBegin */
+  /* Infinite loop */
+  for(;;)
+  {
+	if(LED_flip) {
+		//taskENTER_CRITICAL();
+		neopixel_set(&htim3, 1, 0, 0, 50);
+		//taskEXIT_CRITICAL();
+		LED_flip = 0;
+	}
+	else {
+		//taskENTER_CRITICAL();
+		neopixel_set(&htim3, 1, 50, 0, 0);
+		//taskEXIT_CRITICAL();
+		LED_flip = 1;
+	}
+    osDelay(500);
+  }
+  /* USER CODE END LEDBegin */
 }
 
 /* Callback01 function */
