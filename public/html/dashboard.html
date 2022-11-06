@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <!-- meta -->
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <!-- style -->
+        <link rel="stylesheet" href="css/dashboard.css">
+        <link rel="stylesheet" href="css/common.css">
+    
+    </head>
+    <body>
+        <!-- content -->
+        <div class="control-wrapper">
+            <div class="video-div">
+                <iframe class="video" src="https://www.youtube.com/embed/2-oCNXMsMvg" title="Coney Island Ski Club - Sidetalk" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+            </div>
+            <br><br>
+            <div class="control-div">
+                <a>Current Temperature: </a>
+                    <a id="temp-current">75.0</a>
+                    <br>
+                <a>Target Temperature: </a>
+                    <a id="temp-target"></a>
+                    <br>
+                <a>New Target: </a>
+                    <input type="text" id="temp-input" style="text-align:right" placeholder="new target">
+                    <br>    
+                <btn id="temp-update" style="cursor: pointer">Update Temperature</btn>
+            </div>
+            <br><br>
+            <div class="control-div">
+                <a>Current pH: </a>
+                    <a id="pH-current">75.0</a>
+                    <br>
+                <a>Target Temperature: </a>
+                    <a id="pH-target"></a>
+                    <br>
+                <a>New Target: </a>
+                    <input type="text" id="pH-input" style="text-align:right" placeholder="new target">
+                    <br>    
+                <btn id="pH-update" style="cursor: pointer">Update pH</btn>
+            </div>
+            <br><br>
+            <div class="control-div">
+                <a>Current LED Status: </a>
+                    <a id="LED-current-status"></a>
+                    <br>
+                <a>Current LED Color: </a>
+                    <a id="LED-current-red"></a><a>, </a>
+                    <a id="LED-current-green"></a><a>, </a>
+                    <a id="LED-current-blue"></a>
+                    <br>
+                <a>Target LED Status: </a>
+                    <input type="checkbox" id="LED-target-status">
+                    <br>
+                <a>Target LED Color: </a>
+                    <input type="text" id="LED-target-red" style="text-align:right" placeholder="red">
+                    <input type="text" id="LED-target-green" style="text-align:right" placeholder="green">
+                    <input type="text" id="LED-target-blue" style="text-align:right" placeholder="blue">
+                    <br>
+                <btn id="LED-update" style="cursor: pointer">Update LEDs</btn>
+            </div>
+        </div>
+    </body>
+</html>

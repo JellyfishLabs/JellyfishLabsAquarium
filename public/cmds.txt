@@ -1,0 +1,7 @@
+local server hosting:
+    cd <path>
+    http-server
+
+firebase deploy hosting:
+    cd <base directory>
+    firebase deploy --only hosting

@@ -1,38 +1,75 @@
 <!DOCTYPE html>
-	<html>
-		<head>
-			<meta charset="utf-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1">
-			<meta http-equiv="refresh" content="5">
-			
-			<link rel="stylesheet" href="css/index.css">
-
-			<title>Jellyfish Labs</title>
-		</head>
+<html>
+	<head>
+		<!-- meta -->
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		
+		<!-- style -->
+		<link rel="stylesheet" href="./css/index.css">
+		<link rel="stylesheet" href="./css/common.css">
+		
+		<!-- description -->
+		<title>Jellyfish Labs</title>
+		
+		<!-- javascript -->
+		<script type="module" defer src="/js/index.js"></script>
+	</head>
 	<body>
-		<!-- Navigation -->
-		<div class="nav">
-			<h1>Jellyfish Labs</h1>
-			<ul>
-				<li>My Aquarium</li>
-					<ul>
-						<li>Overview</li>
-						<li>Live Feed</li>
-						<li>Automation</li>
-					</ul>
-				<li>About</li>
-					<ul>
-						<li>Our Mission</li>
-						<li>Development</li>
-						<li>References</li>
-					</ul>
-				<li>Our Team</li>
-				<li>Contact Us</li>
+		<!-- Navigation -->			
+		<div class="sidebar-wrapper">
+			<div class="sidebar-heading">
+				<img src="images/logo.png" class="logo-icon">
+				<div class="logo-name">Aquarium</div>
+				<btn class="sidebar-toggle" id="sidebar-toggle">X</btn>
+			</div>
+			<ul class="nav-list">
+				<li>
+					<a href="#">
+						<!-- insert icon -->
+						<span class="nav-link">Dashboard</span>
+					</a>
+					<span class="nav-tooltip">Dashboard</span>
+				</li>
+				<li>
+					<a href="#">
+						<!-- insert icon -->
+						<span class="nav-link">About</span>
+					</a>
+					<span class="nav-tooltip">About</span>
+				</li>
+				<li>
+					<a href="#">
+						<!-- insert icon -->
+						<span class="nav-link">Contact</span>
+					</a>
+					<span class="nav-tooltip">Contact</span>
+				</li>
+				<li class="profile">
+					<div class="profile-wrapper">
+						<!-- profile image -->
+						<div class="profile-details">
+							<div class="profile-name">Jeff Fish</div>
+							<div class="profile-email">JellyfishLabsHelp@gmail.com</div>
+						</div>
+					</div>
+					<!-- logout button -->
+				</li>
 			</ul>
 		</div>
+		
+		<!-- content -->
+		<section class="main-wrapper">
+			<div id="app"></div>
+		</section>
 
-		<div class="main-overlay">
-			
-		</div>
+  		<script>
+			let sidebar = document.querySelector(".sidebar-wrapper");
+			let closeBtn = document.querySelector("#sidebar-toggle");
+
+			closeBtn.addEventListener("click", ()=>{
+				sidebar.classList.toggle("open");
+			});
+		</script>
 	</body>
 </html>

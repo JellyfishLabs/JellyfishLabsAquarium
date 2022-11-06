@@ -1,5 +1,25 @@
+/*background-color: rgba(49,46,129);*/
+
 * {
     font-family: depot-new-web, sans-serif;
     font-style: normal;
     font-weight: 100;
+}
+
+.logo-icon {
+    float: left;
+    width: 50px;
+}
+
+nav {
+    border-style: solid;
+    border-width: 1px;
+    border-color: black;
+
+    position: fixed;
+    width: 200px;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    z-index: 100;
 }
