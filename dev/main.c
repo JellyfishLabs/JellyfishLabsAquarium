@@ -993,7 +993,7 @@ void DataTxBegin(void const * argument)
 	uint8_t right_brace[] = "}";
 	uint8_t temp_header[] = "{ \"Current temperature\": ";
 	uint8_t tx_temp[6];
-	taskENTER_CRITICAL();
+	//taskENTER_CRITICAL();
 	snprintf(tx_temp, 6, "%0.2f", current_temp);
 	uint8_t pH_header[] = ", \"Current pH value\": ";
 	uint8_t tx_pH[sizeof(current_pH)];
@@ -1011,12 +1011,14 @@ void DataTxBegin(void const * argument)
 	size += sizeof(right_brace);
 	memcpy(tx_packet + size, carriage_return, sizeof(carriage_return));
 	size += sizeof(carriage_return);
+	taskENTER_CRITICAL();
 	HAL_UART_Transmit(&huart4, tx_packet, size, 10000);
 	for (int i = 0; i < 80; ++i){
 		rx_packet[i] = 0;
 	}
-    HAL_UART_Receive(&huart4, rx_packet, 43, 10000);
 	taskEXIT_CRITICAL();
+    HAL_UART_Receive(&huart4, rx_packet, 43, 10000);
+	//taskEXIT_CRITICAL();
     osDelay(10000);
   }
   /* USER CODE END DataTxBegin */
@@ -1133,4 +1135,5 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
 
