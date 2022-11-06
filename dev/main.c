@@ -22,12 +22,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
-#include "stdbool.h"
-#include "stdint.h"
-#include "string.h"
+#include "Ph.h"
+#include "Temperature.h"
 #include "Adafruit_ILI9341.h"
 #include "neopixel.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,25 +36,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-#define GPIO_TEMP_Base GPIOA
-#define GPIO_TEMP_TX GPIO_PIN_5
-#define GPIO_TEMP_RX GPIO_PIN_6
-#define us_timer htim2
-
-#define GPIO_HEATER_Base GPIOA
-#define GPIO_HEATER_PIN GPIO_PIN_7
-
-
-#define GPIO_PH_BASE GPIOC
-#define PH_UP_PIN GPIO_PIN_8
-#define PH_DOWN_PIN GPIO_PIN_6
-
-
-#define DEFAULT_TEMP 77 //Default temp in degrees Fahrenheit if not specified
-#define HEATER_TOLERANCE_LOW 2
-#define HEATER_TOLERANCE_HIGH 2
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -88,9 +68,22 @@ osThreadId PhBalanceTaskHandle;
 osThreadId DataTxTaskHandle;
 osThreadId ScreenTaskHandle;
 osThreadId LEDTaskHandle;
-osTimerId myTimer01Handle;
-osSemaphoreId myBinarySem01Handle;
 /* USER CODE BEGIN PV */
+
+// Global variables
+// ph values
+struct Ph ph;
+float current_pH = 0;
+float target_pH = 7.0;
+float display_current_pH = 0.0;
+float display_target_pH = 0.0;
+
+// temperature values
+struct Temperature temperature;
+double current_temperature = 0;
+double target_temperature = 77.0;
+double display_current_temperature = 0.0;
+double display_target_temperature = 0.0;
 
 /* USER CODE END PV */
 
@@ -112,7 +105,6 @@ void PhBalanceBegin(void const * argument);
 void DataTxBegin(void const * argument);
 void ScreenTaskBegin(void const * argument);
 void LEDBegin(void const * argument);
-void Callback01(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -120,6 +112,11 @@ void Callback01(void const * argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// Heater GPIO and Definitions
+#define GPIO_HEATER_Base GPIOA
+#define GPIO_HEATER_PIN GPIO_PIN_7
+#define HEATER_TOLERANCE_LOW 2
+#define HEATER_TOLERANCE_HIGH 2
 
 //Screen Variables Begin:
 SPI_HandleTypeDef hspi2;
@@ -132,52 +129,16 @@ GPIO_TypeDef* ILI9341_DCX_PORT = GPIOC;
 uint16_t ILI9341_DCX_PIN  = GPIO_PIN_5;
 
 cursor_t cur;
-int changedBrightness;                                                              				// boolean var if brightness has been changed
-uint8_t size[2];
+cursor_t target_temp_header = {0,0};
+cursor_t target_temp_val = {250,0};
+cursor_t current_temp_header= {0,20};
+cursor_t current_temp_val = {250,20};
+cursor_t target_pH_header = {0,40};
+cursor_t target_pH_val = {250,40};
+cursor_t current_pH_header = {0,60};
+cursor_t current_pH_val = {250,60};
 
-volatile double display_current_temp = 0;
-volatile double display_current_pH = 0;
-volatile double display_target_temp = 0;
-volatile double display_target_pH = 0;
-
-//struct ILI9341_locations{
-	cursor_t target_temp_header = {0,0};
-	cursor_t target_temp_val = {250,0};
-	cursor_t current_temp_header= {0,20};
-	cursor_t current_temp_val = {250,20};
-	cursor_t target_pH_header = {0,40};
-	cursor_t target_pH_val = {250,40};
-	cursor_t current_pH_header = {0,60};
-	cursor_t current_pH_val = {250,60};
-//};
-//Screen Variables End:
-
-volatile double temp_raw;
-volatile double temp_C;
-volatile double temp_F;
-volatile double current_pH =1;
-volatile double target_pH = 7.0;
-
-volatile double target_temp = DEFAULT_TEMP;
-volatile double current_temp = DEFAULT_TEMP;
-volatile double temp_samples[8] = {DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP,DEFAULT_TEMP, DEFAULT_TEMP};
-
-
-volatile uint8_t tx_packet[100];
-volatile uint8_t rx_packet[80];
-
-volatile uint8_t LED_flip = 0;
-
-
-void delay_us (uint16_t delay)
-{
-	__HAL_TIM_SET_COUNTER (&htim2, 0);
-	while (__HAL_TIM_GET_COUNTER(&htim2)<delay); //{
-
-}
-
-void ILI9341_default_print()
-{
+void ILI9341_default_print() {
 	ILI9341_ResetTextBox(&cur);
 	ILI9341_PrintString(&target_temp_header, "Target Temperature:");
 	ILI9341_PrintString(&current_temp_header, "Current Temperature:");
@@ -185,165 +146,7 @@ void ILI9341_default_print()
 	ILI9341_PrintString(&current_pH_header, "Current pH value:");
 }
 
-void ILI9341_update()
-{
-	if (display_target_temp != target_temp){
-		uint8_t target_temp_buf[6];
-		snprintf(target_temp_buf, 6, "%0.2f", target_temp);
-		ILI9341_PrintString(&target_temp_val, target_temp_buf);
-		display_target_temp = target_temp;
-		target_temp_val.x = 250;
-		target_temp_val.y = 0;
-	}
-	if (display_current_temp != current_temp){
-		uint8_t current_temp_buf[6];
-		snprintf(current_temp_buf, 6, "%0.2f", current_temp);
-		ILI9341_PrintString(&current_temp_val, current_temp_buf);
-		display_current_temp = current_temp;
-		current_temp_val.x = 250;
-		current_temp_val.y = 20;
-	}
-	if (display_target_pH != target_pH){
-		uint8_t target_pH_buf[6];
-		snprintf(target_pH_buf, 6, "%0.2f", target_pH);
-		ILI9341_PrintString(&target_pH_val, target_pH_buf);
-		display_target_pH = target_pH;
-		target_pH_val.x = 250;
-		target_pH_val.y = 40;
-	}
-	if (display_current_pH != current_pH){
-		uint8_t current_pH_buf[6];
-		snprintf(current_pH_buf, 6, "%0.2f", current_pH);
-		ILI9341_PrintString(&current_pH_val, current_pH_buf);
-		display_current_pH = current_pH;
-		current_pH_val.x = 250;
-		current_pH_val.y = 60;
-	}
-
-}
-
-
-
-
-bool DS18B20_Init()
-{
-  HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  delay_us(5);
-  HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
-  delay_us(750);//480-960
-  HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  int t = 0;
-  while (HAL_GPIO_ReadPin(GPIO_TEMP_Base,GPIO_TEMP_RX))
-  {
-    t++;
-    if (t > 60) return false;
-    delay_us(1);
-  }
-  t = 480 - t;
-  delay_us(t);
-  HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  return true;
-}
-
-void DS18B20_Write(uint8_t data)
-{
-  for (int i = 0; i < 8; i++)
-  {
-    HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
-    delay_us(10);
-    if (data & 1) HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-    else HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
-    data >>= 1;
-    delay_us(50);
-    HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  }
-}
-
-uint8_t DS18B20_Read()
-{
-  HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX, GPIO_PIN_SET);
-  delay_us(2);
-  uint8_t data = 0;
-  for (int i = 0; i < 8; i++)
-  {
-    HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_RESET);
-    delay_us(1);
-    HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-    delay_us(5);
-    data >>= 1;
-    if (HAL_GPIO_ReadPin(GPIO_TEMP_Base,GPIO_TEMP_RX)) data |= 0x80;
-    delay_us(55);
-    HAL_GPIO_WritePin(GPIO_TEMP_Base,GPIO_TEMP_TX,GPIO_PIN_SET);
-  }
-  return data;
-}
-
-volatile int TempRead()
-{
-  if (!DS18B20_Init()) return 0;
-  DS18B20_Write (0xCC); // Send skip ROM command
-  DS18B20_Write (0x44); // Send reading start conversion command
-  if (!DS18B20_Init()) return 0;
-  DS18B20_Write (0xCC); // Send skip ROM command
-  DS18B20_Write (0xBE); // Read the register, a total of nine bytes, the first two bytes are the conversion value
-  int temp = DS18B20_Read (); // Low byte
-  temp |= DS18B20_Read () << 8; // High byte
-  return temp;
-}
-
-volatile double TempCompute()
-{
-	double sum = 0;
-	double temporary[8];
-	for (int i = 0; i < 8; ++i){
-		temporary[i] = temp_samples[i];
-	}
-	for (int i = 1; i < 8; ++i){
-		temp_samples[i] = temporary[i-1];
-		sum += temp_samples[i];
-	}
-	temp_samples[0] = temp_F;
-	sum += temp_F;
-	return (sum/8);
-}
-
-
-
-void HEATER_CONTROL_ON()
-{
-	HAL_GPIO_WritePin(GPIO_HEATER_Base,GPIO_HEATER_PIN,GPIO_PIN_SET);
-}
-
-void HEATER_CONTROL_OFF()
-{
-	HAL_GPIO_WritePin(GPIO_HEATER_Base,GPIO_HEATER_PIN,GPIO_PIN_RESET);
-}
-
-void HEATER_TOGGLE()
-{
-	 HAL_GPIO_TogglePin(GPIO_HEATER_Base,GPIO_HEATER_PIN);
-}
-
-void HEATER_DECIDE()
-{
-	if(HAL_GPIO_ReadPin(GPIO_HEATER_Base,GPIO_HEATER_PIN)){
-		if(current_temp >= target_temp + HEATER_TOLERANCE_HIGH){
-			HEATER_CONTROL_OFF();
-		}
-	}
-	else{
-		if (current_temp < target_temp - HEATER_TOLERANCE_LOW){
-			HEATER_CONTROL_ON();
-		}
-	}
-}
-
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
-{
-  HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
-}
-
-
+uint8_t LED_flip = 0;
 
 /* USER CODE END 0 */
 
@@ -388,25 +191,16 @@ int main(void)
   __disable_irq();
   ILI9341_default_print();
   __enable_irq();
+
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
-  /* Create the semaphores(s) */
-  /* definition and creation of myBinarySem01 */
-  osSemaphoreDef(myBinarySem01);
-  myBinarySem01Handle = osSemaphoreCreate(osSemaphore(myBinarySem01), 1);
-
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
-
-  /* Create the timer(s) */
-  /* definition and creation of myTimer01 */
-  osTimerDef(myTimer01, Callback01);
-  myTimer01Handle = osTimerCreate(osTimer(myTimer01), osTimerPeriodic, NULL);
 
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
@@ -450,7 +244,7 @@ int main(void)
   LEDTaskHandle = osThreadCreate(osThread(LEDTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
-
+  /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -872,7 +666,7 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    osDelay(1000);
   }
   /* USER CODE END 5 */
 }
@@ -887,27 +681,15 @@ void StartDefaultTask(void const * argument)
 void TempSensorBegin(void const * argument)
 {
   /* USER CODE BEGIN TempSensorBegin */
-
+  temperature_init(&temperature);
   /* Infinite loop */
   for(;;)
   {
-	  taskENTER_CRITICAL();
-	  temp_raw = TempRead();
-	  taskEXIT_CRITICAL();
-	  if (temp_raw != 0)
-	  {
-		  temp_C  = temp_raw * 0.0625; // conversion accuracy is 0.0625 / LSB
-		  temp_F = temp_raw * 0.1125 + 32;
-		  current_temp = TempCompute();
-	  }
-	  if (temp_F > 60){
-	  	  HAL_GPIO_TogglePin(GPIO_TEMP_Base, GPIO_PIN_8);
-	  }
-	  osDelay(2000);
-
+	taskENTER_CRITICAL();
+	current_temperature = temperature_read(&temperature);
+	taskEXIT_CRITICAL();
+	osDelay(1000);
   }
-
-  osThreadTerminate(NULL);
   /* USER CODE END TempSensorBegin */
 }
 
@@ -922,13 +704,23 @@ void HeaterBegin(void const * argument)
 {
   /* USER CODE BEGIN HeaterBegin */
   /* Infinite loop */
-  for(;;)
-  {
-	HEATER_DECIDE();
-	osDelay(3000);
+  for(;;) {
+	// Heater is already on, check if it should be turned off
+	if(HAL_GPIO_ReadPin(GPIO_HEATER_Base,GPIO_HEATER_PIN)){
+		if(current_temperature >= target_temperature + HEATER_TOLERANCE_HIGH){
+			// turn heater off
+			HAL_GPIO_WritePin(GPIO_HEATER_Base,GPIO_HEATER_PIN,GPIO_PIN_RESET);
+		}
+	}
+	// heater is off, check if we should turn it on
+	else {
+		if (current_temperature < target_temperature - HEATER_TOLERANCE_LOW){
+			// turn heater on
+			HAL_GPIO_WritePin(GPIO_HEATER_Base,GPIO_HEATER_PIN,GPIO_PIN_SET);
+		}
+	}
+    osDelay(1000);
   }
-
-  osThreadTerminate(NULL);
   /* USER CODE END HeaterBegin */
 }
 
@@ -942,12 +734,11 @@ void HeaterBegin(void const * argument)
 void PhSensorBegin(void const * argument)
 {
   /* USER CODE BEGIN PhSensorBegin */
+  pH_init(&ph, hadc);
   /* Infinite loop */
   for(;;)
   {
-	HAL_ADC_Start(&hadc);
-	HAL_ADC_PollForConversion(&hadc, 0xFFFFFFFF);
-	current_pH = (double)HAL_ADC_GetValue(&hadc) * 0.002734375; // *14 /1024 /5
+	current_pH = pH_read(&ph);
     osDelay(1000);
   }
   /* USER CODE END PhSensorBegin */
@@ -966,8 +757,6 @@ void PhBalanceBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	HAL_GPIO_TogglePin(GPIO_PH_BASE, PH_UP_PIN);
-	HAL_GPIO_TogglePin(GPIO_PH_BASE, PH_DOWN_PIN);
     osDelay(1000);
   }
   /* USER CODE END PhBalanceBegin */
@@ -986,40 +775,7 @@ void DataTxBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	 // for (int i = 0; i < 60; ++i){
-	  	//	tx_packet[i] = 0;
-	  //	}
-	uint8_t carriage_return[] = "\r\n";
-	uint8_t right_brace[] = "}";
-	uint8_t temp_header[] = "{ \"Current temperature\": ";
-	uint8_t tx_temp[6];
-	//taskENTER_CRITICAL();
-	snprintf(tx_temp, 6, "%0.2f", current_temp);
-	uint8_t pH_header[] = ", \"Current pH value\": ";
-	uint8_t tx_pH[sizeof(current_pH)];
-	snprintf(tx_pH, 4, "%0.2f", current_pH);
-	volatile unsigned int size=0;
-	memcpy(tx_packet + size, temp_header, sizeof(temp_header));
-	size+= sizeof(temp_header);
-	memcpy(tx_packet + size, tx_temp, sizeof(tx_temp));
-	size += sizeof(tx_temp);
-	memcpy(tx_packet + size, pH_header, sizeof(pH_header));
-	size += sizeof(pH_header);
-	memcpy(tx_packet + size, tx_pH, 3);
-	size += 3;
-	memcpy(tx_packet + size, right_brace, sizeof(right_brace));
-	size += sizeof(right_brace);
-	memcpy(tx_packet + size, carriage_return, sizeof(carriage_return));
-	size += sizeof(carriage_return);
-	taskENTER_CRITICAL();
-	HAL_UART_Transmit(&huart4, tx_packet, size, 10000);
-	for (int i = 0; i < 80; ++i){
-		rx_packet[i] = 0;
-	}
-	taskEXIT_CRITICAL();
-    HAL_UART_Receive(&huart4, rx_packet, 43, 10000);
-	//taskEXIT_CRITICAL();
-    osDelay(10000);
+    osDelay(1000);
   }
   /* USER CODE END DataTxBegin */
 }
@@ -1035,12 +791,40 @@ void ScreenTaskBegin(void const * argument)
 {
   /* USER CODE BEGIN ScreenTaskBegin */
   /* Infinite loop */
-  for(;;)
-  {
-	taskENTER_CRITICAL();
-	ILI9341_update();
-	taskEXIT_CRITICAL();
-    osDelay(10000);
+  for(;;) {
+	if (display_target_temperature != target_temperature) {
+		uint8_t target_temp_buf[6];
+		snprintf(target_temp_buf, 6, "%0.2f", target_temperature);
+		ILI9341_PrintString(&target_temp_val, target_temp_buf);
+		display_target_temperature = target_temperature;
+		target_temp_val.x = 250;
+		target_temp_val.y = 0;
+	}
+	if (display_current_temperature != current_temperature) {
+		uint8_t current_temp_buf[6];
+		snprintf(current_temp_buf, 6, "%0.2f", current_temperature);
+		ILI9341_PrintString(&current_temp_val, current_temp_buf);
+		display_current_temperature = current_temperature;
+		current_temp_val.x = 250;
+		current_temp_val.y = 20;
+	}
+	if (display_target_pH != target_pH) {
+		uint8_t target_pH_buf[6];
+		snprintf(target_pH_buf, 6, "%0.2f", target_pH);
+		ILI9341_PrintString(&target_pH_val, target_pH_buf);
+		display_target_pH = target_pH;
+		target_pH_val.x = 250;
+		target_pH_val.y = 40;
+	}
+	if (display_current_pH != current_pH) {
+		uint8_t current_pH_buf[6];
+		snprintf(current_pH_buf, 6, "%0.2f", current_pH);
+		ILI9341_PrintString(&current_pH_val, current_pH_buf);
+		display_current_pH = current_pH;
+		current_pH_val.x = 250;
+		current_pH_val.y = 60;
+	}
+    osDelay(1000);
   }
   /* USER CODE END ScreenTaskBegin */
 }
@@ -1056,31 +840,18 @@ void LEDBegin(void const * argument)
 {
   /* USER CODE BEGIN LEDBegin */
   /* Infinite loop */
-  for(;;)
-  {
+  for(;;) {
 	if(LED_flip) {
-		//taskENTER_CRITICAL();
 		neopixel_set(&htim3, 1, 0, 0, 50);
-		//taskEXIT_CRITICAL();
 		LED_flip = 0;
 	}
 	else {
-		//taskENTER_CRITICAL();
 		neopixel_set(&htim3, 1, 50, 0, 0);
-		//taskEXIT_CRITICAL();
 		LED_flip = 1;
 	}
-    osDelay(500);
+    osDelay(1000);
   }
   /* USER CODE END LEDBegin */
-}
-
-/* Callback01 function */
-void Callback01(void const * argument)
-{
-  /* USER CODE BEGIN Callback01 */
-
-  /* USER CODE END Callback01 */
 }
 
 /**
@@ -1135,5 +906,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-
