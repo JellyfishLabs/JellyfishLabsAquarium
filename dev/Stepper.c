@@ -8,6 +8,8 @@
 
 #include "Stepper.h"
 
+GPIO_TypeDef* motor_port[4];
+
 /*
  * @brief   Initializes stepper struct
  * @param	number_of_steps		number of steps for stepper motor
@@ -17,7 +19,7 @@
  * @param	motor_p1			3A H-bridge pin
  * @param	motor_p1			4A H-bridge pin
  */
-void init_stepper(int number_of_steps, Stepper *s, int motor_pin[])
+void init_stepper(int number_of_steps, Stepper *s, uint16_t* motor_pin, GPIO_TypeDef* motor_port_in[4])
 {
 	  s->step_number = 0;    // which step the motor is on
 	  s->direction = 0;      // motor direction
@@ -25,7 +27,10 @@ void init_stepper(int number_of_steps, Stepper *s, int motor_pin[])
 	  s->number_of_steps = number_of_steps; // total number of steps for s motor
 
 	  // STM Ports for pins:
-
+	  motor_port[0] = motor_port_in[0];
+	  motor_port[1] = motor_port_in[1];
+	  motor_port[2] = motor_port_in[2];
+	  motor_port[3] = motor_port_in[3];
 
 	  // STM pins for the motor control connection:
 	  s->motor_pin_1 = motor_pin[0];
@@ -66,6 +71,7 @@ void step(int steps_to_move, Stepper *s)
   // decrement the number of steps, moving one step each time:
   while (steps_left > 0){
 	  // increment or decrement the step number,
+	  HAL_Delay(2);
 	  // depending on direction:
 	  if (s->direction == 1)
 	  {
@@ -84,47 +90,44 @@ void step(int steps_to_move, Stepper *s)
 	  // decrement the steps left:
 	  steps_left--;
 	  // step the motor to step number 0, 1, ..., {3 or 10}
-	  if (s->pin_count == 5)
-		stepMotor(s->step_number % 10);
-	  else
-		stepMotor(s->step_number % 4);
+	  stepMotor(s, s->step_number % 4);
   }
 
 }
 
-void stepMotor(int thisStep)
+void stepMotor(Stepper* s, int thisStep)
 {
 
   //assign below
   //Example:
-  //motor_port_1[6] = GPIOA;
+
 
   //if (this->pin_count == 4) {
     switch (thisStep) {
       case 0:  // 1010
 
-        HAL_GPIO_WritePin(motor_port_1, motor_pin_1, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(motor_port_2, motor_pin_2, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(motor_port_3, motor_pin_3, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(motor_port_4, motor_pin_4, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[0], s->motor_pin_1, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[1], s->motor_pin_2, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[2], s->motor_pin_3, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[3], s->motor_pin_4, GPIO_PIN_RESET);
       break;
       case 1:  // 0110
-        HAL_GPIO_WritePin(motor_port_1, motor_pin_1, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(motor_port_2, motor_pin_2, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(motor_port_3, motor_pin_3, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(motor_port_4, motor_pin_4, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[0], s->motor_pin_1, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[1], s->motor_pin_2, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[2], s->motor_pin_3, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[3], s->motor_pin_4, GPIO_PIN_RESET);
       break;
       case 2:  //0101
-        HAL_GPIO_WritePin(motor_port_1, motor_pin_1, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(motor_port_2, motor_pin_2, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(motor_port_3, motor_pin_3, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(motor_port_4, motor_pin_4, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[0], s->motor_pin_1, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[1], s->motor_pin_2, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[2], s->motor_pin_3, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[3], s->motor_pin_4, GPIO_PIN_SET);
       break;
       case 3:  //1001
-        HAL_GPIO_WritePin(motor_port_1, motor_pin_1, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(motor_port_2, motor_pin_2, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(motor_port_3, motor_pin_3, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(motor_port_4, motor_pin_4, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[0], s->motor_pin_1, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(motor_port[1], s->motor_pin_2, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[2], s->motor_pin_3, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(motor_port[3], s->motor_pin_4, GPIO_PIN_SET);
       break;
     }
   //}
@@ -137,4 +140,3 @@ void stepMotor(int thisStep)
 int version(void){
 	return 5;
 }
-

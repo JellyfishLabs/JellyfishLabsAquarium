@@ -15,7 +15,12 @@
 #ifndef SRC_STEPPER_H_
 #define SRC_STEPPER_H_
 
-struct Stepper {
+#include <stdint.h>
+#include "stm32l1xx_hal.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct STEPPER_STRUCT {
 
     int direction;            // Direction of rotation
     unsigned long step_delay; // delay between steps, in us, based on speed
@@ -23,21 +28,15 @@ struct Stepper {
     int pin_count;            // how many pins are in use.
     int step_number;          // which step the motor is on
 
-    // array for motor ports:
-    char motor_port_1[6];
-    char motor_port_2[6];
-    char motor_port_3[6];
-    char motor_port_4[6];
-
     // motor pins:
-    int motor_pin_1;
-    int motor_pin_2;
-    int motor_pin_3;
-    int motor_pin_4;
+    uint16_t motor_pin_1;
+    uint16_t motor_pin_2;
+    uint16_t motor_pin_3;
+    uint16_t motor_pin_4;
 
     unsigned long last_step_time; // time stamp in us of when the last step was taken
 
-};
+} Stepper;
 
 
 
@@ -48,7 +47,7 @@ struct Stepper {
  * @param	motor_port			[0] = pin1 port, [1] = pin2 port, ... [3] = pin4 port
  * @param	motor_pin			[0] = pin1 number, [1] = pin2 number, ... [3] = pin4 number
  */
-void init_stepper(int number_of_steps, Stepper *s, int motor_pin[]);
+void init_stepper(int number_of_steps, Stepper *s, uint16_t* motor_pin, GPIO_TypeDef* motor_port_in[4]);
 
 /*
  * @brief   Sets speed for stepper motor
@@ -72,7 +71,7 @@ int version(void);
  * @brief   step				Steps the motor to step number
  * @param	this_step			Step number
 */
-void stepMotor(int this_step);
+void stepMotor(Stepper* s, int thisStep);
 
 
 
