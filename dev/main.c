@@ -73,17 +73,24 @@ osThreadId LEDTaskHandle;
 // Global variables
 // ph values
 struct Ph ph;
-float current_pH = 0;
+float current_pH = 7.0;
 float target_pH = 7.0;
 float display_current_pH = 0.0;
 float display_target_pH = 0.0;
 
 // temperature values
 struct Temperature temperature;
-double current_temperature = 0;
+double current_temperature = 75.0;
 double target_temperature = 77.0;
 double display_current_temperature = 0.0;
 double display_target_temperature = 0.0;
+
+// LED values
+uint8_t LED_enable = 0;
+uint8_t LED_red = 0, LED_blue = 0, LED_green = 0;
+
+// Feeder Value
+uint8_t serve_betta = 0, serve_flake = 0, size_betta = 0, size_flake = 0;
 
 /* USER CODE END PV */
 
@@ -105,6 +112,8 @@ void PhBalanceBegin(void const * argument);
 void DataTxBegin(void const * argument);
 void ScreenTaskBegin(void const * argument);
 void LEDBegin(void const * argument);
+float uint8_to_float(uint8_t argument, uint8_t value[]);
+uint8_t convert_LED_value(uint8_t value[]);
 
 /* USER CODE BEGIN PFP */
 
@@ -146,7 +155,32 @@ void ILI9341_default_print() {
 	ILI9341_PrintString(&current_pH_header, "Current pH value:");
 }
 
-uint8_t LED_flip = 0;
+float uint8_to_float(uint8_t is_pH, uint8_t value[]) {
+	float return_val = 0;
+	if(is_pH) {
+		return_val += (value[0] - 48.0) * 1.0;
+		return_val += (value[2] - 48.0) / 10.0;
+		return_val += (value[3] - 48.0) / 100.0;
+	}
+	else {
+		return_val += (value[0] - 48.0) * 10.0;
+		return_val += (value[1] - 48.0) * 1.0;
+		return_val += (value[3] - 48.0) / 10.0;
+		return_val += (value[4] - 48.0) / 100.0;
+	}
+	return return_val;
+}
+
+uint8_t convert_LED_value(uint8_t value[]) {
+	uint8_t return_val = 0;
+	return_val += (value[0] - 48) * 100;
+	return_val += (value[1] - 48) * 10;
+	return_val += (value[2] - 48);
+}
+
+
+uint8_t tx_data[12] = "75.00 7.49\r\n";
+uint8_t rx_data[27];
 
 /* USER CODE END 0 */
 
@@ -772,9 +806,50 @@ void PhBalanceBegin(void const * argument)
 void DataTxBegin(void const * argument)
 {
   /* USER CODE BEGIN DataTxBegin */
+  int pos;
   /* Infinite loop */
   for(;;)
   {
+	pos = 0;
+	// transmit temperature and pH data to the website
+	// add temperature
+	uint8_t temp_data[6];
+	snprintf(temp_data, 6, "%0.2f", current_temperature);
+	memcpy(tx_data, temp_data, 5);
+	pos += 5;
+
+	// add a space
+	memcpy(tx_data + pos, " ", 1);
+	pos += 1;
+
+	// add pH data
+	uint pH_data[5];
+	snprintf(pH_data, 5, "%0.2f", current_pH);
+	memcpy(tx_data + pos, pH_data, 4);
+	pos += 4;
+
+	// add carriage return
+	memcpy(tx_data + pos, "\r\n", 2);
+	pos += 1;
+
+	HAL_UART_Transmit(&huart4, tx_data, sizeof(tx_data), 10000);
+	HAL_UART_Receive(&huart4, rx_data, 27, 10000);
+	uint8_t target_temp_uint8[5], target_pH_uint8[4], LED_red_uint8[3], LED_blue_uint8[3], LED_green_uint8[3];
+	memcpy(target_temp_uint8, rx_data + 1, 5);
+	memcpy(target_pH_uint8, rx_data + 7, 4);
+	memcpy(LED_red_uint8, rx_data + 13, 4);
+	memcpy(LED_green_uint8, rx_data + 16, 4);
+	memcpy(LED_blue_uint8, rx_data + 19, 4);
+	target_temperature = uint8_to_float(0, target_temp_uint8);
+	target_pH = uint8_to_float(1, target_pH_uint8);
+	LED_enable = rx_data[12] - 48;
+	LED_red = convert_LED_value(LED_red_uint8);
+	LED_green = convert_LED_value(LED_green_uint8);
+	LED_blue = convert_LED_value(LED_blue_uint8);
+	serve_betta = rx_data[23] - 48;
+	size_betta = rx_data[24] - 48;
+	serve_flake = rx_data[25] - 48;
+	size_flake = rx_data[26] - 48;
     osDelay(1000);
   }
   /* USER CODE END DataTxBegin */
@@ -841,14 +916,7 @@ void LEDBegin(void const * argument)
   /* USER CODE BEGIN LEDBegin */
   /* Infinite loop */
   for(;;) {
-	if(LED_flip) {
-		neopixel_set(&htim3, 1, 0, 0, 50);
-		LED_flip = 0;
-	}
-	else {
-		neopixel_set(&htim3, 1, 50, 0, 0);
-		LED_flip = 1;
-	}
+	neopixel_set(&htim3, LED_enable, LED_red, LED_green, LED_blue);
     osDelay(1000);
   }
   /* USER CODE END LEDBegin */
@@ -906,3 +974,4 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
