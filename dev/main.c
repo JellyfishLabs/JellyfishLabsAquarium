@@ -26,6 +26,7 @@
 #include "Temperature.h"
 #include "Adafruit_ILI9341.h"
 #include "neopixel.h"
+#include "Stepper.h"
 
 /* USER CODE END Includes */
 
@@ -68,6 +69,8 @@ osThreadId PhBalanceTaskHandle;
 osThreadId DataTxTaskHandle;
 osThreadId ScreenTaskHandle;
 osThreadId LEDTaskHandle;
+osThreadId BettaFeederTaskHandle;
+osThreadId FlakeFeederTaskHandle;
 /* USER CODE BEGIN PV */
 
 // Global variables
@@ -112,8 +115,8 @@ void PhBalanceBegin(void const * argument);
 void DataTxBegin(void const * argument);
 void ScreenTaskBegin(void const * argument);
 void LEDBegin(void const * argument);
-float uint8_to_float(uint8_t argument, uint8_t value[]);
-uint8_t convert_LED_value(uint8_t value[]);
+void BettaFeederBegin(void const * argument);
+void FlakeFeederBegin(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -121,11 +124,21 @@ uint8_t convert_LED_value(uint8_t value[]);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void delay_us_main (uint16_t delay) {
+	__HAL_TIM_SET_COUNTER (&htim2, 0);
+	while (__HAL_TIM_GET_COUNTER(&htim2)<delay);
+}
+
+
 // Heater GPIO and Definitions
 #define GPIO_HEATER_Base GPIOA
 #define GPIO_HEATER_PIN GPIO_PIN_7
-#define HEATER_TOLERANCE_LOW 2
-#define HEATER_TOLERANCE_HIGH 2
+#define HEATER_TOLERANCE_LOW 0.5
+#define HEATER_TOLERANCE_HIGH 0.5
+#define STEPS_CAP 100
+#define FLAKE_FEEDER_PIN GPIO_PIN_5
+#define FLAKE_FEEDER_PORT GPIOB
 
 //Screen Variables Begin:
 SPI_HandleTypeDef hspi2;
@@ -154,6 +167,11 @@ void ILI9341_default_print() {
 	ILI9341_PrintString(&target_pH_header, "Target pH value:");
 	ILI9341_PrintString(&current_pH_header, "Current pH value:");
 }
+
+//Define Stepper Struct
+Stepper bettaFeeder;
+uint16_t stepper_pins[4] = {GPIO_PIN_0, GPIO_PIN_1, GPIO_PIN_0, GPIO_PIN_4};
+GPIO_TypeDef* stepper_ports[4] = {GPIOC, GPIOC, GPIOB, GPIOA};
 
 float uint8_to_float(uint8_t is_pH, uint8_t value[]) {
 	float return_val = 0;
@@ -226,6 +244,7 @@ int main(void)
   ILI9341_default_print();
   __enable_irq();
 
+  init_stepper(STEPS_CAP, &bettaFeeder, stepper_pins, stepper_ports);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -246,8 +265,8 @@ int main(void)
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
-  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+ // osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+  //defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* definition and creation of TempSensorTask */
   osThreadDef(TempSensorTask, TempSensorBegin, osPriorityAboveNormal, 0, 128);
@@ -276,6 +295,14 @@ int main(void)
   /* definition and creation of LEDTask */
   osThreadDef(LEDTask, LEDBegin, osPriorityAboveNormal, 0, 256);
   LEDTaskHandle = osThreadCreate(osThread(LEDTask), NULL);
+
+  /* definition and creation of BettaFeederTask */
+  osThreadDef(BettaFeederTask, BettaFeederBegin, osPriorityIdle, 0, 128);
+  BettaFeederTaskHandle = osThreadCreate(osThread(BettaFeederTask), NULL);
+
+  /* definition and creation of FlakeFeederTask */
+  osThreadDef(FlakeFeederTask, FlakeFeederBegin, osPriorityIdle, 0, 128);
+  FlakeFeederTaskHandle = osThreadCreate(osThread(FlakeFeederTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -650,10 +677,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_0|GPIO_PIN_1
+                          |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOH, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_10|GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -661,8 +695,24 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA5 PA7 PA8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8;
+  /*Configure GPIO pins : PC14 PC15 PC0 PC1
+                           PC4 PC5 PC6 PC8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15|GPIO_PIN_0|GPIO_PIN_1
+                          |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PH0 PH1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA4 PA5 PA7 PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -674,12 +724,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC4 PC5 PC6 PC8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8;
+  /*Configure GPIO pins : PB0 PB10 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_10|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 }
 
@@ -922,6 +972,59 @@ void LEDBegin(void const * argument)
   /* USER CODE END LEDBegin */
 }
 
+/* USER CODE BEGIN Header_BettaFeederBegin */
+/**
+* @brief Function implementing the BettaFeederTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_BettaFeederBegin */
+void BettaFeederBegin(void const * argument)
+{
+  /* USER CODE BEGIN BettaFeederBegin */
+  /* Infinite loop */
+  for(;;)
+  {
+	  taskENTER_CRITICAL();
+	  for (int i = 0; i < STEPS_CAP; ++i){
+		  step(1, &bettaFeeder);
+		  delay_us_main(1000);
+		  //delay_us(1000);
+	  }
+	  taskEXIT_CRITICAL();
+    osDelay(10000);
+  }
+  /* USER CODE END BettaFeederBegin */
+}
+
+/* USER CODE BEGIN Header_FlakeFeederBegin */
+/**
+* @brief Function implementing the FlakeFeederTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_FlakeFeederBegin */
+void FlakeFeederBegin(void const * argument)
+{
+  /* USER CODE BEGIN FlakeFeederBegin */
+  /* Infinite loop */
+  for(;;)
+  {
+	 taskENTER_CRITICAL();
+	 HAL_GPIO_WritePin(FLAKE_FEEDER_PORT,FLAKE_FEEDER_PIN,GPIO_PIN_SET);
+
+	 for (int i = 0; i < 100; ++i){
+		 delay_us_main(10000);
+	 }
+	 HAL_GPIO_WritePin(FLAKE_FEEDER_PORT,FLAKE_FEEDER_PIN,GPIO_PIN_RESET);
+	 taskEXIT_CRITICAL();
+
+
+    osDelay(10000);
+  }
+  /* USER CODE END FlakeFeederBegin */
+}
+
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM5 interrupt took place, inside
@@ -974,4 +1077,5 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
 
