@@ -53,13 +53,14 @@ DMA_HandleTypeDef hdma_spi2_tx;
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+DMA_HandleTypeDef hdma_tim2_up;
 DMA_HandleTypeDef hdma_tim3_ch4_up;
 DMA_HandleTypeDef hdma_tim3_ch1_trig;
 
 UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
-DMA_HandleTypeDef hdma_uart4_tx;
 DMA_HandleTypeDef hdma_uart4_rx;
+DMA_HandleTypeDef hdma_uart4_tx;
 
 osThreadId defaultTaskHandle;
 osThreadId TempSensorTaskHandle;
@@ -71,7 +72,10 @@ osThreadId ScreenTaskHandle;
 osThreadId LEDTaskHandle;
 osThreadId BettaFeederTaskHandle;
 osThreadId FlakeFeederTaskHandle;
+osSemaphoreId ledChangedSemHandle;
 /* USER CODE BEGIN PV */
+
+extern void delay_us(uint16_t delay);
 
 // Global variables
 // ph values
@@ -91,6 +95,8 @@ double display_target_temperature = 0.0;
 // LED values
 uint8_t LED_enable = 0;
 uint8_t LED_red = 0, LED_blue = 0, LED_green = 0;
+uint8_t new_LED_enable = 0;
+uint8_t new_LED_red = 0, new_LED_blue = 0, new_LED_green = 0;
 
 // Feeder Value
 uint8_t serve_betta = 0, serve_flake = 0, size_betta = 0, size_flake = 0;
@@ -104,9 +110,9 @@ static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC_Init(void);
-static void MX_UART4_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_UART4_Init(void);
 void StartDefaultTask(void const * argument);
 void TempSensorBegin(void const * argument);
 void HeaterBegin(void const * argument);
@@ -139,6 +145,7 @@ void delay_us_main (uint16_t delay) {
 #define STEPS_CAP 100
 #define FLAKE_FEEDER_PIN GPIO_PIN_5
 #define FLAKE_FEEDER_PORT GPIOB
+#define INCLUDE_vTaskSuspend 1
 
 //Screen Variables Begin:
 SPI_HandleTypeDef hspi2;
@@ -234,9 +241,9 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_ADC_Init();
-  MX_UART4_Init();
   MX_SPI2_Init();
   MX_TIM3_Init();
+  MX_UART4_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
   ILI9341_Init();
@@ -250,6 +257,11 @@ int main(void)
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
+
+  /* Create the semaphores(s) */
+  /* definition and creation of ledChangedSem */
+  osSemaphoreDef(ledChangedSem);
+  ledChangedSemHandle = osSemaphoreCreate(osSemaphore(ledChangedSem), 1);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -266,41 +278,41 @@ int main(void)
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
  // osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
-  //defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
-
-  /* definition and creation of TempSensorTask */
+ // defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+//
+//  /* definition and creation of TempSensorTask */
   osThreadDef(TempSensorTask, TempSensorBegin, osPriorityAboveNormal, 0, 128);
   TempSensorTaskHandle = osThreadCreate(osThread(TempSensorTask), NULL);
-
-  /* definition and creation of HeaterTask */
+//
+//  /* definition and creation of HeaterTask */
   osThreadDef(HeaterTask, HeaterBegin, osPriorityNormal, 0, 128);
   HeaterTaskHandle = osThreadCreate(osThread(HeaterTask), NULL);
-
-  /* definition and creation of PhSensorTask */
+//
+//  /* definition and creation of PhSensorTask */
   osThreadDef(PhSensorTask, PhSensorBegin, osPriorityIdle, 0, 128);
   PhSensorTaskHandle = osThreadCreate(osThread(PhSensorTask), NULL);
-
-  /* definition and creation of PhBalanceTask */
+//
+//  /* definition and creation of PhBalanceTask */
   osThreadDef(PhBalanceTask, PhBalanceBegin, osPriorityIdle, 0, 128);
   PhBalanceTaskHandle = osThreadCreate(osThread(PhBalanceTask), NULL);
-
-  /* definition and creation of DataTxTask */
+//
+//  /* definition and creation of DataTxTask */
   osThreadDef(DataTxTask, DataTxBegin, osPriorityHigh, 0, 256);
   DataTxTaskHandle = osThreadCreate(osThread(DataTxTask), NULL);
-
-  /* definition and creation of ScreenTask */
+//
+//  /* definition and creation of ScreenTask */
   osThreadDef(ScreenTask, ScreenTaskBegin, osPriorityHigh, 0, 256);
   ScreenTaskHandle = osThreadCreate(osThread(ScreenTask), NULL);
-
-  /* definition and creation of LEDTask */
+//
+//  /* definition and creation of LEDTask */
   osThreadDef(LEDTask, LEDBegin, osPriorityAboveNormal, 0, 256);
   LEDTaskHandle = osThreadCreate(osThread(LEDTask), NULL);
-
-  /* definition and creation of BettaFeederTask */
+//
+//  /* definition and creation of BettaFeederTask */
   osThreadDef(BettaFeederTask, BettaFeederBegin, osPriorityIdle, 0, 128);
   BettaFeederTaskHandle = osThreadCreate(osThread(BettaFeederTask), NULL);
-
-  /* definition and creation of FlakeFeederTask */
+//
+//  /* definition and creation of FlakeFeederTask */
   osThreadDef(FlakeFeederTask, FlakeFeederBegin, osPriorityIdle, 0, 128);
   FlakeFeederTaskHandle = osThreadCreate(osThread(FlakeFeederTask), NULL);
 
@@ -636,10 +648,13 @@ static void MX_DMA_Init(void)
 {
 
   /* DMA controller clock enable */
-  __HAL_RCC_DMA2_CLK_ENABLE();
   __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
+  /* DMA1_Channel2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
   /* DMA1_Channel3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
@@ -880,10 +895,11 @@ void DataTxBegin(void const * argument)
 
 	// add carriage return
 	memcpy(tx_data + pos, "\r\n", 2);
-	pos += 1;
-
+	pos += 2;
+	taskENTER_CRITICAL();
 	HAL_UART_Transmit(&huart4, tx_data, sizeof(tx_data), 10000);
 	HAL_UART_Receive(&huart4, rx_data, 27, 10000);
+	taskEXIT_CRITICAL();
 	uint8_t target_temp_uint8[5], target_pH_uint8[4], LED_red_uint8[3], LED_blue_uint8[3], LED_green_uint8[3];
 	memcpy(target_temp_uint8, rx_data + 1, 5);
 	memcpy(target_pH_uint8, rx_data + 7, 4);
@@ -892,10 +908,17 @@ void DataTxBegin(void const * argument)
 	memcpy(LED_blue_uint8, rx_data + 19, 4);
 	target_temperature = uint8_to_float(0, target_temp_uint8);
 	target_pH = uint8_to_float(1, target_pH_uint8);
-	LED_enable = rx_data[12] - 48;
-	LED_red = convert_LED_value(LED_red_uint8);
-	LED_green = convert_LED_value(LED_green_uint8);
-	LED_blue = convert_LED_value(LED_blue_uint8);
+	new_LED_enable = rx_data[12] - 48;
+	new_LED_red = convert_LED_value(LED_red_uint8);
+	new_LED_green = convert_LED_value(LED_green_uint8);
+	new_LED_blue = convert_LED_value(LED_blue_uint8);
+	if(new_LED_enable != LED_enable || new_LED_red != LED_red || new_LED_green != LED_green || new_LED_blue != LED_blue) {
+		LED_enable = new_LED_enable;
+		LED_red = new_LED_red;
+		LED_green = new_LED_green;
+		LED_blue = new_LED_blue;
+		xSemaphoreGive(ledChangedSemHandle);
+	}
 	serve_betta = rx_data[23] - 48;
 	size_betta = rx_data[24] - 48;
 	serve_flake = rx_data[25] - 48;
@@ -966,8 +989,8 @@ void LEDBegin(void const * argument)
   /* USER CODE BEGIN LEDBegin */
   /* Infinite loop */
   for(;;) {
+	xSemaphoreTake(ledChangedSemHandle, portMAX_DELAY);
 	neopixel_set(&htim3, LED_enable, LED_red, LED_green, LED_blue);
-    osDelay(1000);
   }
   /* USER CODE END LEDBegin */
 }
@@ -992,7 +1015,7 @@ void BettaFeederBegin(void const * argument)
 		  //delay_us(1000);
 	  }
 	  taskEXIT_CRITICAL();
-    osDelay(10000);
+    osDelay(12000);
   }
   /* USER CODE END BettaFeederBegin */
 }
@@ -1020,7 +1043,7 @@ void FlakeFeederBegin(void const * argument)
 	 taskEXIT_CRITICAL();
 
 
-    osDelay(10000);
+    osDelay(12000);
   }
   /* USER CODE END FlakeFeederBegin */
 }
@@ -1077,5 +1100,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-
