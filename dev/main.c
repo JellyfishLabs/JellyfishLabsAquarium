@@ -48,8 +48,8 @@
 ADC_HandleTypeDef hadc;
 
 SPI_HandleTypeDef hspi2;
-DMA_HandleTypeDef hdma_spi2_rx;
 DMA_HandleTypeDef hdma_spi2_tx;
+DMA_HandleTypeDef hdma_spi2_rx;
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
@@ -58,7 +58,6 @@ DMA_HandleTypeDef hdma_tim3_ch4_up;
 DMA_HandleTypeDef hdma_tim3_ch1_trig;
 
 UART_HandleTypeDef huart4;
-UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_uart4_rx;
 DMA_HandleTypeDef hdma_uart4_tx;
 
@@ -73,6 +72,8 @@ osThreadId LEDTaskHandle;
 osThreadId BettaFeederTaskHandle;
 osThreadId FlakeFeederTaskHandle;
 osSemaphoreId ledChangedSemHandle;
+osSemaphoreId feedBettaSemHandle;
+osSemaphoreId feedFlakeSemHandle;
 /* USER CODE BEGIN PV */
 
 extern void delay_us(uint16_t delay);
@@ -88,13 +89,13 @@ float display_target_pH = 0.0;
 // temperature values
 struct Temperature temperature;
 double current_temperature = 75.0;
-double target_temperature = 77.0;
+double target_temperature = 74.0;
 double display_current_temperature = 0.0;
 double display_target_temperature = 0.0;
 
 // LED values
-uint8_t LED_enable = 0;
-uint8_t LED_red = 0, LED_blue = 0, LED_green = 0;
+uint8_t LED_enable = 1;
+uint8_t LED_red = 100, LED_blue = 0, LED_green = 0;
 uint8_t new_LED_enable = 0;
 uint8_t new_LED_red = 0, new_LED_blue = 0, new_LED_green = 0;
 
@@ -107,7 +108,6 @@ uint8_t serve_betta = 0, serve_flake = 0, size_betta = 0, size_flake = 0;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC_Init(void);
 static void MX_SPI2_Init(void);
@@ -139,15 +139,46 @@ void delay_us_main (uint16_t delay) {
 
 // Heater GPIO and Definitions
 #define GPIO_HEATER_Base GPIOA
-#define GPIO_HEATER_PIN GPIO_PIN_7
-#define HEATER_TOLERANCE_LOW 0.5
-#define HEATER_TOLERANCE_HIGH 0.5
+#define GPIO_HEATER_PIN GPIO_PIN_12
+#define HEATER_TOLERANCE_LOW 0.2
+#define HEATER_TOLERANCE_HIGH 0.2
+#define PH_TOLERANCE_LOW 0.1
+#define PH_TOLERANCE_HIGH 0.1
 #define STEPS_CAP 100
-#define FLAKE_FEEDER_PIN GPIO_PIN_5
-#define FLAKE_FEEDER_PORT GPIOB
+#define FLAKE_FEEDER_PIN GPIO_PIN_0
+#define FLAKE_FEEDER_PORT GPIOC
 #define INCLUDE_vTaskSuspend 1
 
+//pH Pins
+#define GPIO_PH_BASE GPIOC
+#define GPIO_PH_UP_PIN GPIO_PIN_0
+#define GPIO_PH_DOWN_PIN GPIO_PIN_1
+
+void raise_pH(){
+	HAL_GPIO_WritePin(GPIO_PH_BASE, GPIO_PH_UP_PIN, GPIO_PIN_SET);
+	for (int i = 0; i < 1100; ++i){
+		delay_us_main(300);
+	}
+	HAL_GPIO_WritePin(GPIO_PH_BASE, GPIO_PH_UP_PIN, GPIO_PIN_RESET);
+}
+
+void lower_pH(){
+	HAL_GPIO_WritePin(GPIO_PH_BASE, GPIO_PH_DOWN_PIN, GPIO_PIN_SET);
+	for (int i = 0; i < 1100; ++i){
+		delay_us_main(300);
+	}
+	HAL_GPIO_WritePin(GPIO_PH_BASE, GPIO_PH_DOWN_PIN, GPIO_PIN_RESET);
+}
+
+
 //Screen Variables Begin:
+
+#define SCREEN_HEADER_VALUE_X 0
+#define SCREEN_DATA_VALUE_X 250
+#define SCREEN_LINE_HEIGHT 20
+
+
+
 SPI_HandleTypeDef hspi2;
 SPI_HandleTypeDef* ILI9341_HSPI_INST = &hspi2;
 
@@ -158,27 +189,38 @@ GPIO_TypeDef* ILI9341_DCX_PORT = GPIOC;
 uint16_t ILI9341_DCX_PIN  = GPIO_PIN_5;
 
 cursor_t cur;
-cursor_t target_temp_header = {0,0};
-cursor_t target_temp_val = {250,0};
-cursor_t current_temp_header= {0,20};
-cursor_t current_temp_val = {250,20};
-cursor_t target_pH_header = {0,40};
-cursor_t target_pH_val = {250,40};
-cursor_t current_pH_header = {0,60};
-cursor_t current_pH_val = {250,60};
+cursor_t temp_title = {30,10};
+cursor_t ph_title = {340, 10};
+cursor_t current_temp_header= {0,80};
+cursor_t current_temp_val = {60,100};
+cursor_t target_temp_header = {10,190};
+cursor_t target_temp_val = {60,210};
+cursor_t current_pH_header = {290,80};
+cursor_t current_pH_val = {320,100};
+cursor_t target_pH_header = {290,190};
+cursor_t target_pH_val = {320,210};
 
 void ILI9341_default_print() {
+	delay_us_main(100000);
 	ILI9341_ResetTextBox(&cur);
+	ILI9341_SetClrParam(0xFFFF, 0x8000);
+	ILI9341_ResetTextBox(&cur);
+	ILI9341_SetFontParam(3);
+	ILI9341_PrintString(&temp_title, "Temperature");
+	ILI9341_PrintString(&ph_title, "pH");
+	ILI9341_SetFontParam(2);
 	ILI9341_PrintString(&target_temp_header, "Target Temperature:");
 	ILI9341_PrintString(&current_temp_header, "Current Temperature:");
-	ILI9341_PrintString(&target_pH_header, "Target pH value:");
-	ILI9341_PrintString(&current_pH_header, "Current pH value:");
+	ILI9341_PrintString(&target_pH_header, "Target pH:");
+	ILI9341_PrintString(&current_pH_header, "Current pH:");
+	ILI9341_SetFontParam(4);
+	ILI9341_SetClrParam(0x0F00, 0x8000);
 }
 
 //Define Stepper Struct
 Stepper bettaFeeder;
-uint16_t stepper_pins[4] = {GPIO_PIN_0, GPIO_PIN_1, GPIO_PIN_0, GPIO_PIN_4};
-GPIO_TypeDef* stepper_ports[4] = {GPIOC, GPIOC, GPIOB, GPIOA};
+uint16_t stepper_pins[4] = {GPIO_PIN_3, GPIO_PIN_2, GPIO_PIN_4, GPIO_PIN_5};
+GPIO_TypeDef* stepper_ports[4] = {GPIOA, GPIOA, GPIOA, GPIOA};
 
 float uint8_to_float(uint8_t is_pH, uint8_t value[]) {
 	float return_val = 0;
@@ -238,7 +280,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_ADC_Init();
   MX_SPI2_Init();
@@ -246,7 +287,10 @@ int main(void)
   MX_UART4_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
+  HAL_TIM_Base_Start(&htim3);
+  delay_us_main(10000);
   ILI9341_Init();
+  delay_us_main(10000);
   __disable_irq();
   ILI9341_default_print();
   __enable_irq();
@@ -263,6 +307,14 @@ int main(void)
   osSemaphoreDef(ledChangedSem);
   ledChangedSemHandle = osSemaphoreCreate(osSemaphore(ledChangedSem), 1);
 
+  /* definition and creation of feedBettaSem */
+  osSemaphoreDef(feedBettaSem);
+  feedBettaSemHandle = osSemaphoreCreate(osSemaphore(feedBettaSem), 1);
+
+  /* definition and creation of feedFlakeSem */
+  osSemaphoreDef(feedFlakeSem);
+  feedFlakeSemHandle = osSemaphoreCreate(osSemaphore(feedFlakeSem), 1);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
@@ -277,44 +329,44 @@ int main(void)
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
- // osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
- // defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
-//
-//  /* definition and creation of TempSensorTask */
+//  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+//  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
+  /* definition and creation of TempSensorTask */
   osThreadDef(TempSensorTask, TempSensorBegin, osPriorityAboveNormal, 0, 128);
   TempSensorTaskHandle = osThreadCreate(osThread(TempSensorTask), NULL);
-//
-//  /* definition and creation of HeaterTask */
+
+  /* definition and creation of HeaterTask */
   osThreadDef(HeaterTask, HeaterBegin, osPriorityNormal, 0, 128);
   HeaterTaskHandle = osThreadCreate(osThread(HeaterTask), NULL);
-//
-//  /* definition and creation of PhSensorTask */
+
+  /* definition and creation of PhSensorTask */
   osThreadDef(PhSensorTask, PhSensorBegin, osPriorityIdle, 0, 128);
   PhSensorTaskHandle = osThreadCreate(osThread(PhSensorTask), NULL);
-//
-//  /* definition and creation of PhBalanceTask */
+
+  /* definition and creation of PhBalanceTask */
   osThreadDef(PhBalanceTask, PhBalanceBegin, osPriorityIdle, 0, 128);
   PhBalanceTaskHandle = osThreadCreate(osThread(PhBalanceTask), NULL);
-//
-//  /* definition and creation of DataTxTask */
+
+  /* definition and creation of DataTxTask */
   osThreadDef(DataTxTask, DataTxBegin, osPriorityHigh, 0, 256);
   DataTxTaskHandle = osThreadCreate(osThread(DataTxTask), NULL);
-//
-//  /* definition and creation of ScreenTask */
+
+  /* definition and creation of ScreenTask */
   osThreadDef(ScreenTask, ScreenTaskBegin, osPriorityHigh, 0, 256);
   ScreenTaskHandle = osThreadCreate(osThread(ScreenTask), NULL);
-//
-//  /* definition and creation of LEDTask */
-  osThreadDef(LEDTask, LEDBegin, osPriorityAboveNormal, 0, 256);
-  LEDTaskHandle = osThreadCreate(osThread(LEDTask), NULL);
-//
-//  /* definition and creation of BettaFeederTask */
-  osThreadDef(BettaFeederTask, BettaFeederBegin, osPriorityIdle, 0, 128);
-  BettaFeederTaskHandle = osThreadCreate(osThread(BettaFeederTask), NULL);
-//
-//  /* definition and creation of FlakeFeederTask */
-  osThreadDef(FlakeFeederTask, FlakeFeederBegin, osPriorityIdle, 0, 128);
-  FlakeFeederTaskHandle = osThreadCreate(osThread(FlakeFeederTask), NULL);
+
+  /* definition and creation of LEDTask */
+ // osThreadDef(LEDTask, LEDBegin, osPriorityAboveNormal, 0, 256);
+ // LEDTaskHandle = osThreadCreate(osThread(LEDTask), NULL);
+
+  /* definition and creation of BettaFeederTask */
+ // osThreadDef(BettaFeederTask, BettaFeederBegin, osPriorityIdle, 0, 128);
+ // BettaFeederTaskHandle = osThreadCreate(osThread(BettaFeederTask), NULL);
+
+  /* definition and creation of FlakeFeederTask */
+ // osThreadDef(FlakeFeederTask, FlakeFeederBegin, osPriorityIdle, 0, 128);
+ // FlakeFeederTaskHandle = osThreadCreate(osThread(FlakeFeederTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -328,6 +380,14 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+//	  neopixel_set(&htim3, 1, 255, 255, 255);
+//	  HAL_Delay(500);
+//	  neopixel_set(&htim3, 1, 255, 0, 0);
+//	  HAL_Delay(500);
+//	  neopixel_set(&htim3, 0, 255, 255, 255);
+//	  HAL_Delay(500);
+
+	  HAL_GPIO_WritePin(GPIOB,GPIO_PIN_2,GPIO_PIN_SET);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -609,39 +669,6 @@ static void MX_UART4_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART2_Init 0 */
-
-  /* USER CODE END USART2_Init 0 */
-
-  /* USER CODE BEGIN USART2_Init 1 */
-
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART2_Init 2 */
-
-  /* USER CODE END USART2_Init 2 */
-
-}
-
-/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -699,10 +726,11 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOH, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5
+                          |GPIO_PIN_7|GPIO_PIN_8|GPIO_PIN_12, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_10|GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_2|GPIO_PIN_10|GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -726,8 +754,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA4 PA5 PA7 PA8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_7|GPIO_PIN_8;
+  /*Configure GPIO pins : PA2 PA3 PA4 PA5
+                           PA7 PA8 PA12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5
+                          |GPIO_PIN_7|GPIO_PIN_8|GPIO_PIN_12;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -739,8 +769,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB0 PB10 PB5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_10|GPIO_PIN_5;
+  /*Configure GPIO pins : PB0 PB2 PB10 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_2|GPIO_PIN_10|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -856,7 +886,13 @@ void PhBalanceBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1000);
+		if (current_pH - PH_TOLERANCE_HIGH > target_pH){
+			lower_pH();
+		}
+		else if (current_pH + PH_TOLERANCE_LOW < target_pH){
+			raise_pH();
+		}
+	    osDelay(300000);
   }
   /* USER CODE END PhBalanceBegin */
 }
@@ -923,6 +959,12 @@ void DataTxBegin(void const * argument)
 	size_betta = rx_data[24] - 48;
 	serve_flake = rx_data[25] - 48;
 	size_flake = rx_data[26] - 48;
+	if (serve_betta) {
+		xSemaphoreGive(feedBettaSemHandle);
+	}
+	if (serve_flake) {
+		xSemaphoreGive(feedFlakeSemHandle);
+	}
     osDelay(1000);
   }
   /* USER CODE END DataTxBegin */
@@ -940,12 +982,13 @@ void ScreenTaskBegin(void const * argument)
   /* USER CODE BEGIN ScreenTaskBegin */
   /* Infinite loop */
   for(;;) {
+
 	if (display_target_temperature != target_temperature) {
 		uint8_t target_temp_buf[6];
 		snprintf(target_temp_buf, 6, "%0.2f", target_temperature);
 		ILI9341_PrintString(&target_temp_val, target_temp_buf);
 		display_target_temperature = target_temperature;
-		target_temp_val.x = 250;
+		target_temp_val.x = SCREEN_DATA_VALUE_X;
 		target_temp_val.y = 0;
 	}
 	if (display_current_temperature != current_temperature) {
@@ -953,7 +996,7 @@ void ScreenTaskBegin(void const * argument)
 		snprintf(current_temp_buf, 6, "%0.2f", current_temperature);
 		ILI9341_PrintString(&current_temp_val, current_temp_buf);
 		display_current_temperature = current_temperature;
-		current_temp_val.x = 250;
+		current_temp_val.x = SCREEN_DATA_VALUE_X;
 		current_temp_val.y = 20;
 	}
 	if (display_target_pH != target_pH) {
@@ -961,7 +1004,7 @@ void ScreenTaskBegin(void const * argument)
 		snprintf(target_pH_buf, 6, "%0.2f", target_pH);
 		ILI9341_PrintString(&target_pH_val, target_pH_buf);
 		display_target_pH = target_pH;
-		target_pH_val.x = 250;
+		target_pH_val.x = SCREEN_DATA_VALUE_X;
 		target_pH_val.y = 40;
 	}
 	if (display_current_pH != current_pH) {
@@ -969,7 +1012,7 @@ void ScreenTaskBegin(void const * argument)
 		snprintf(current_pH_buf, 6, "%0.2f", current_pH);
 		ILI9341_PrintString(&current_pH_val, current_pH_buf);
 		display_current_pH = current_pH;
-		current_pH_val.x = 250;
+		current_pH_val.x = SCREEN_DATA_VALUE_X;
 		current_pH_val.y = 60;
 	}
     osDelay(1000);
@@ -989,9 +1032,10 @@ void LEDBegin(void const * argument)
   /* USER CODE BEGIN LEDBegin */
   /* Infinite loop */
   for(;;) {
-	xSemaphoreTake(ledChangedSemHandle, portMAX_DELAY);
+	//xSemaphoreTake(ledChangedSemHandle, portMAX_DELAY);
 	neopixel_set(&htim3, LED_enable, LED_red, LED_green, LED_blue);
   }
+  osDelay(10000);
   /* USER CODE END LEDBegin */
 }
 
@@ -1008,14 +1052,16 @@ void BettaFeederBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	  taskENTER_CRITICAL();
-	  for (int i = 0; i < STEPS_CAP; ++i){
-		  step(1, &bettaFeeder);
-		  delay_us_main(1000);
-		  //delay_us(1000);
+	  xSemaphoreTake(feedBettaSemHandle, portMAX_DELAY);
+	  for (int i =0; i < size_betta; ++i)
+	  {
+		  taskENTER_CRITICAL();
+	  	  for (int i = 0; i < STEPS_CAP; ++i){
+	  		  step(1, &bettaFeeder);
+	  		  delay_us_main(1000);
+	  	  }
+	  	  taskEXIT_CRITICAL();
 	  }
-	  taskEXIT_CRITICAL();
-    osDelay(12000);
   }
   /* USER CODE END BettaFeederBegin */
 }
@@ -1033,17 +1079,17 @@ void FlakeFeederBegin(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	 taskENTER_CRITICAL();
-	 HAL_GPIO_WritePin(FLAKE_FEEDER_PORT,FLAKE_FEEDER_PIN,GPIO_PIN_SET);
+	 xSemaphoreTake(feedFlakeSemHandle, portMAX_DELAY);
+	 for (int i = 0; i < size_flake; ++i){
+		 taskENTER_CRITICAL();
+		 HAL_GPIO_WritePin(FLAKE_FEEDER_PORT,FLAKE_FEEDER_PIN,GPIO_PIN_SET);
 
-	 for (int i = 0; i < 100; ++i){
-		 delay_us_main(10000);
+		 for (int i = 0; i < 100; ++i){
+			 delay_us_main(10000);
+		 }
+		 HAL_GPIO_WritePin(FLAKE_FEEDER_PORT,FLAKE_FEEDER_PIN,GPIO_PIN_RESET);
+		 taskEXIT_CRITICAL();
 	 }
-	 HAL_GPIO_WritePin(FLAKE_FEEDER_PORT,FLAKE_FEEDER_PIN,GPIO_PIN_RESET);
-	 taskEXIT_CRITICAL();
-
-
-    osDelay(12000);
   }
   /* USER CODE END FlakeFeederBegin */
 }
