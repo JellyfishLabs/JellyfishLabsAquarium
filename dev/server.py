@@ -77,23 +77,12 @@ def main():
         receive_data = ser.read(12)
         
         
-        # make sure we read 12 valid bytes, if not, wait for msgs to be realigned
-        #if receive_data[11] != 10:
-         #   ser.flush()
-          #  ser.flushInput()
-           # ser.flushOutput()
-            #time.sleep(5)
-            #print("Invalid UART Message Received")
-            #continue
-        
         current_data['temperature'] = str(receive_data[:5])
         current_data['pH'] = str(receive_data[6:10])
         print(current_data)
         # Update database for current statistics
         write_database('Controls', 'Current', current_data)
         time.sleep(1)
-#     ser.close();
-    
 
 if __name__ == "__main__":
     main()
